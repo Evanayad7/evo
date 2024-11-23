@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mobile Camera Feed</title>
+    <title>Mobile Camera Grid</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -11,116 +11,148 @@
             padding: 0;
             text-align: center;
         }
+        h1 {
+            margin: 10px 0;
+        }
+        p {
+            margin: 10px 0 20px;
+        }
+        #videoGrid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 20px;
+        }
         video {
-            width: 80%;
+            width: 100%;
             height: auto;
             border: 2px solid green;
-            margin-top: 20px;
+            border-radius: 5px;
         }
     </style>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
 </head>
 <body>
 
-<h1>Mobile Camera Feed</h1>
-<p>Stream your mobile camera and share it!</p>
+<h1>Mobile Camera Grid</h1>
+<p>View all connected users' cameras below:</p>
 
-<video id="localVideo" autoplay muted></video>
-<video id="remoteVideo" autoplay></video>
+<div id="videoGrid"></div>
 
 <script>
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
-
+    const videoGrid = document.getElementById('videoGrid');
     const socket = io('https://evo-gqz9.onrender.com'); // Replace with your deployed server URL
 
     let localStream;
-    let peerConnection;
+    let peerConnections = {}; // Store connections for each peer
     const iceServers = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' } // Use Google's public STUN server
         ]
     };
 
-    // Get user's camera and microphone
+    // Start local video stream
     async function startStream() {
         try {
             localStream = await navigator.mediaDevices.getUserMedia({
                 video: true,
-                audio: true
+                audio: false
             });
-            localVideo.srcObject = localStream;
+            addVideoStream('You', localStream);
 
-            // Emit offer to the server
-            createOffer();
+            // Notify server about new user
+            socket.emit('join-room');
         } catch (error) {
             console.error('Error accessing media devices:', error);
         }
     }
 
-    // Create a new peer connection
-    function createPeerConnection() {
-        peerConnection = new RTCPeerConnection(iceServers);
+    // Add a video element to the grid
+    function addVideoStream(userId, stream) {
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.autoplay = true;
+        video.setAttribute('data-user', userId); // Tag with user ID
+        videoGrid.appendChild(video);
+    }
 
-        // Add local stream tracks to the peer connection
+    // Handle new user connection
+    socket.on('user-connected', userId => {
+        console.log(`User connected: ${userId}`);
+        const peerConnection = createPeerConnection(userId);
+        peerConnections[userId] = peerConnection;
+
+        // Add local tracks to the peer connection
         localStream.getTracks().forEach(track => {
             peerConnection.addTrack(track, localStream);
         });
 
-        // Handle ICE candidates
-        peerConnection.onicecandidate = event => {
-            if (event.candidate) {
-                socket.emit('ice-candidate', event.candidate);
-            }
-        };
-
-        // Handle remote stream
-        peerConnection.ontrack = event => {
-            remoteVideo.srcObject = event.streams[0];
-        };
-    }
-
-    // Create and send an offer
-    async function createOffer() {
-        createPeerConnection();
-
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-
-        socket.emit('offer', {
-            sdp: offer.sdp,
-            type: offer.type
-        });
-    }
+        // Create and send an offer
+        peerConnection.createOffer()
+            .then(offer => peerConnection.setLocalDescription(offer))
+            .then(() => {
+                socket.emit('offer', { to: userId, offer: peerConnection.localDescription });
+            });
+    });
 
     // Handle incoming offer
-    socket.on('offer', async data => {
-        createPeerConnection();
+    socket.on('offer', ({ from, offer }) => {
+        console.log(`Received offer from: ${from}`);
+        const peerConnection = createPeerConnection(from);
+        peerConnections[from] = peerConnection;
 
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit('answer', {
-            sdp: answer.sdp,
-            type: answer.type
-        });
+        peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
+            .then(() => peerConnection.createAnswer())
+            .then(answer => peerConnection.setLocalDescription(answer))
+            .then(() => {
+                socket.emit('answer', { to: from, answer: peerConnection.localDescription });
+            });
     });
 
     // Handle incoming answer
-    socket.on('answer', async data => {
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
+    socket.on('answer', ({ from, answer }) => {
+        console.log(`Received answer from: ${from}`);
+        const peerConnection = peerConnections[from];
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
-    // Handle incoming ICE candidates
-    socket.on('ice-candidate', async data => {
-        try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data));
-        } catch (error) {
-            console.error('Error adding received ICE candidate:', error);
+    // Handle incoming ICE candidate
+    socket.on('ice-candidate', ({ from, candidate }) => {
+        console.log(`Received ICE candidate from: ${from}`);
+        const peerConnection = peerConnections[from];
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    // Create a new peer connection
+    function createPeerConnection(userId) {
+        const peerConnection = new RTCPeerConnection(iceServers);
+
+        // Handle ICE candidates
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                socket.emit('ice-candidate', { to: userId, candidate: event.candidate });
+            }
+        };
+
+        // Handle incoming tracks
+        peerConnection.ontrack = event => {
+            console.log(`Receiving track from: ${userId}`);
+            addVideoStream(userId, event.streams[0]);
+        };
+
+        return peerConnection;
+    }
+
+    // Notify when a user disconnects
+    socket.on('user-disconnected', userId => {
+        console.log(`User disconnected: ${userId}`);
+        const video = document.querySelector(`[data-user="${userId}"]`);
+        if (video) {
+            videoGrid.removeChild(video);
+        }
+        if (peerConnections[userId]) {
+            peerConnections[userId].close();
+            delete peerConnections[userId];
         }
     });
 
