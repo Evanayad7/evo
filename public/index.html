@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebRTC Live Stream</title>
+  <title>WebRTC Camera Selection</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -23,118 +23,77 @@
     #local-video {
       border: 2px solid #4CAF50;
     }
-    #remote-video {
-      border: 2px solid #ff6347;
+    select {
+      margin: 10px;
+      padding: 5px;
+      font-size: 16px;
     }
-    #buttons {
-      margin-top: 20px;
+    button {
+      padding: 10px 15px;
+      font-size: 16px;
+      margin-top: 10px;
     }
   </style>
 </head>
 <body>
 
-  <h1>WebRTC Live Stream</h1>
+  <h1>Select Camera for Live Stream</h1>
   
-  <!-- Local Video Display -->
+  <!-- Dropdown to display available cameras -->
+  <select id="camera-select"></select>
+  
+  <!-- Video Display -->
   <video id="local-video" autoplay muted playsinline></video>
+  
+  <button id="startButton">Start Video</button>
 
-  <!-- Remote Video Display -->
-  <video id="remote-video" autoplay playsinline></video>
-
-  <div id="buttons">
-    <!-- Action buttons -->
-    <button id="startButton">Start Video</button>
-  </div>
-
-  <script src="/socket.io/socket.io.js"></script>
   <script>
-    // Initialize socket connection
-    const socket = io('https://evo-gqz9.onrender.com');  // Replace with your signaling server URL
-
+    const cameraSelect = document.getElementById('camera-select');
+    const localVideo = document.getElementById('local-video');
     let localStream;
-    let peerConnection;
-    let remoteVideo = document.getElementById('remote-video');
-    let localVideo = document.getElementById('local-video');
 
-    const iceServers = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
-    };
+    // Function to list all video input devices
+    async function listCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
 
-    // Initialize WebRTC components
+        // Populate the camera select dropdown
+        cameraSelect.innerHTML = '';
+        videoDevices.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `Camera ${index + 1}`;
+          cameraSelect.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error accessing media devices:', error);
+      }
+    }
+
+    // Function to start video from the selected camera
     async function startVideo() {
       try {
-        // Request access to user's webcam and microphone
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const selectedDeviceId = cameraSelect.value;
+
+        // Stop previous stream if it exists
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+        }
+
+        // Start the stream with the selected device
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: selectedDeviceId } },
+          audio: false
+        });
         localVideo.srcObject = localStream;
-
-        // Initialize peer connection
-        peerConnection = new RTCPeerConnection(iceServers);
-
-        // Add local stream tracks to peer connection
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-        // Listen for remote stream
-        peerConnection.ontrack = function (event) {
-          if (event.streams[0]) {
-            remoteVideo.srcObject = event.streams[0];
-          }
-        };
-
-        // Create offer and send to the server
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.emit('offer', { sdp: offer.sdp, type: offer.type });
-
       } catch (error) {
         console.error('Error starting video:', error);
       }
     }
 
-    // Handle received offer
-    socket.on('offer', async (data) => {
-      console.log('Received offer:', data);
-
-      if (!peerConnection) {
-        await startVideo();
-      }
-
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-
-      // Create an answer and send it to the server
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      socket.emit('answer', { sdp: answer.sdp, type: answer.type });
-    });
-
-    // Handle received answer
-    socket.on('answer', async (data) => {
-      console.log('Received answer:', data);
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-    });
-
-    // Handle ICE candidates
-    socket.on('ice-candidate', (data) => {
-      console.log('Received ICE candidate:', data);
-      const candidate = new RTCIceCandidate({
-        candidate: data.candidate,
-        sdpMid: data.sdpMid,
-        sdpMLineIndex: data.sdpMLineIndex
-      });
-      peerConnection.addIceCandidate(candidate);
-    });
-
-    // Send ICE candidates to the server
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('ice-candidate', {
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex
-        });
-      }
-    };
+    // Populate the camera list on page load
+    window.onload = listCameras;
 
     // Start video when the button is clicked
     document.getElementById('startButton').onclick = startVideo;
