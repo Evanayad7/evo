@@ -18,46 +18,47 @@ const server = http.createServer(app);
 
 // Initialize Socket.IO with the server
 const io = socketIo(server, {
-    cors: {
-        origin: '*', // Allow all origins (update this with specific domains in production)
-        methods: ['GET', 'POST']
-    }
+  cors: {
+    origin: '*', // Allow all origins (update this with specific domains in production)
+    methods: ['GET', 'POST']
+  }
 });
 
 // Handle WebSocket connections
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+  console.log('A user connected');
 
-    // Broadcast the user's connection to others
-    socket.broadcast.emit('user-connected', socket.id);
+  // Handle incoming video stream
+  socket.on('video-stream', (stream) => {
+    // Broadcast the video stream to other connected clients
+    socket.broadcast.emit('video-stream', stream);
+  });
 
-    // Handle offer (WebRTC signaling)
-    socket.on('offer', (data) => {
-        console.log('Offer received from:', socket.id);
-        // Send the offer to a specific user
-        io.to(data.target).emit('offer', { data: data.sdp, id: socket.id });
-    });
+  // Handle offer (WebRTC signaling)
+  socket.on('offer', (data) => {
+    console.log('Offer received:', data);
+    // Broadcast the offer to other clients
+    socket.broadcast.emit('offer', data);
+  });
 
-    // Handle answer (WebRTC signaling)
-    socket.on('answer', (data) => {
-        console.log('Answer received from:', socket.id);
-        // Send the answer back to the offer sender
-        io.to(data.target).emit('answer', { data: data.sdp, id: socket.id });
-    });
+  // Handle answer (WebRTC signaling)
+  socket.on('answer', (data) => {
+    console.log('Answer received:', data);
+    // Broadcast the answer to other clients
+    socket.broadcast.emit('answer', data);
+  });
 
-    // Handle ICE candidates (WebRTC signaling)
-    socket.on('ice-candidate', (data) => {
-        console.log('ICE Candidate received from:', socket.id);
-        // Send the ICE candidate to the appropriate peer
-        io.to(data.target).emit('ice-candidate', { candidate: data.candidate, id: socket.id });
-    });
+  // Handle ICE candidates (WebRTC signaling)
+  socket.on('ice-candidate', (candidate) => {
+    console.log('ICE Candidate received:', candidate);
+    // Broadcast the ICE candidate to other clients
+    socket.broadcast.emit('ice-candidate', candidate);
+  });
 
-    // Notify other clients about user disconnection
-    socket.on('disconnect', () => {
-        console.log('A user disconnected:', socket.id);
-        // Notify remaining clients about the disconnection
-        socket.broadcast.emit('user-disconnected', socket.id);
-    });
+  // Handle disconnections
+  socket.on('disconnect', () => {
+    console.log('A user disconnected');
+  });
 });
 
 // Dynamic port for deployment or default to 8080
@@ -65,5 +66,5 @@ const PORT = process.env.PORT || 8080;
 
 // Start the server
 server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running on http://localhost:${PORT}`);
 });
