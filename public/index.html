@@ -1,183 +1,133 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Camera Streaming</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.js"></script>
+    <title>Mobile Camera Feed</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #f4f4f4;
-            color: #333;
-        }
-        header {
-            background-color: #333;
-            color: #fff;
-            padding: 10px 20px;
             text-align: center;
         }
-        #video-container {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin: 20px;
-        }
         video {
-            margin: 10px;
-            border: 2px solid #333;
-            width: 300px;
+            width: 80%;
             height: auto;
-        }
-        #log {
-            margin: 20px auto;
-            max-width: 600px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            background: #fff;
-            overflow-y: scroll;
-            max-height: 200px;
+            border: 2px solid green;
+            margin-top: 20px;
         }
     </style>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
 </head>
 <body>
-    <header>
-        <h1>Multi-Camera Streaming</h1>
-    </header>
-    <div id="video-container"></div>
-    <div id="log"></div>
 
-    <script>
-        const socket = io.connect();
-        const videoContainer = document.getElementById('video-container');
-        const log = document.getElementById('log');
+<h1>Mobile Camera Feed</h1>
+<p>Stream your mobile camera and share it!</p>
 
-        const peers = {};
-        const configuration = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
-            ]
-        };
+<video id="localVideo" autoplay muted></video>
+<video id="remoteVideo" autoplay></video>
 
-        function logMessage(message) {
-            const logEntry = document.createElement('div');
-            logEntry.textContent = message;
-            log.appendChild(logEntry);
-        }
+<script>
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
 
-        // Add a video element to the DOM
-        function addVideoElement(id) {
-            const video = document.createElement('video');
-            video.id = `video-${id}`;
-            video.autoplay = true;
-            videoContainer.appendChild(video);
-            return video;
-        }
+    const socket = io('http://localhost:8080'); // Replace with your deployed server URL
 
-        // Remove a video element from the DOM
-        function removeVideoElement(id) {
-            const video = document.getElementById(`video-${id}`);
-            if (video) {
-                videoContainer.removeChild(video);
-            }
-        }
+    let localStream;
+    let peerConnection;
+    const iceServers = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' } // Use Google's public STUN server
+        ]
+    };
 
-        // Start streaming from local camera
-        async function startLocalStream() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                const localVideo = addVideoElement('local');
-                localVideo.srcObject = stream;
-
-                socket.emit('new-peer');
-                return stream;
-            } catch (err) {
-                logMessage('Error accessing camera: ' + err.message);
-            }
-        }
-
-        // Create a new peer connection
-        function createPeerConnection(id, stream) {
-            const peerConnection = new RTCPeerConnection(configuration);
-
-            stream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, stream);
+    // Get user's camera and microphone
+    async function startStream() {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
             });
+            localVideo.srcObject = localStream;
 
-            peerConnection.ontrack = (event) => {
-                const video = peers[id] || addVideoElement(id);
-                video.srcObject = event.streams[0];
-            };
-
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', { target: id, candidate: event.candidate });
-                }
-            };
-
-            return peerConnection;
+            // Emit offer to the server
+            createOffer();
+        } catch (error) {
+            console.error('Error accessing media devices:', error);
         }
+    }
 
-        // Handle user connections
-        socket.on('user-connected', (id) => {
-            logMessage(`User connected: ${id}`);
-            const peerConnection = createPeerConnection(id, localStream);
-            peers[id] = peerConnection;
+    // Create a new peer connection
+    function createPeerConnection() {
+        peerConnection = new RTCPeerConnection(iceServers);
 
-            peerConnection.createOffer().then((offer) => {
-                peerConnection.setLocalDescription(offer);
-                socket.emit('offer', { target: id, sdp: offer });
-            });
-        });
-
-        // Handle incoming offers
-        socket.on('offer', async ({ id, data }) => {
-            logMessage(`Offer received from: ${id}`);
-            const peerConnection = createPeerConnection(id, localStream);
-            peers[id] = peerConnection;
-
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-
-            socket.emit('answer', { target: id, sdp: answer });
-        });
-
-        // Handle incoming answers
-        socket.on('answer', async ({ id, data }) => {
-            logMessage(`Answer received from: ${id}`);
-            const peerConnection = peers[id];
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-            }
+        // Add local stream tracks to the peer connection
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
         });
 
         // Handle ICE candidates
-        socket.on('ice-candidate', ({ id, candidate }) => {
-            logMessage(`ICE Candidate received from: ${id}`);
-            const peerConnection = peers[id];
-            if (peerConnection) {
-                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                socket.emit('ice-candidate', event.candidate);
             }
-        });
+        };
 
-        // Handle user disconnections
-        socket.on('user-disconnected', (id) => {
-            logMessage(`User disconnected: ${id}`);
-            if (peers[id]) {
-                peers[id].close();
-                delete peers[id];
-            }
-            removeVideoElement(id);
-        });
+        // Handle remote stream
+        peerConnection.ontrack = event => {
+            remoteVideo.srcObject = event.streams[0];
+        };
+    }
 
-        // Start the application
-        let localStream;
-        startLocalStream().then((stream) => {
-            localStream = stream;
+    // Create and send an offer
+    async function createOffer() {
+        createPeerConnection();
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+
+        socket.emit('offer', {
+            sdp: offer.sdp,
+            type: offer.type
         });
-    </script>
+    }
+
+    // Handle incoming offer
+    socket.on('offer', async data => {
+        createPeerConnection();
+
+        const remoteDesc = new RTCSessionDescription(data);
+        await peerConnection.setRemoteDescription(remoteDesc);
+
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        socket.emit('answer', {
+            sdp: answer.sdp,
+            type: answer.type
+        });
+    });
+
+    // Handle incoming answer
+    socket.on('answer', async data => {
+        const remoteDesc = new RTCSessionDescription(data);
+        await peerConnection.setRemoteDescription(remoteDesc);
+    });
+
+    // Handle incoming ICE candidates
+    socket.on('ice-candidate', async data => {
+        try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+        } catch (error) {
+            console.error('Error adding received ICE candidate:', error);
+        }
+    });
+
+    // Start the stream on page load
+    window.onload = startStream;
+</script>
+
 </body>
 </html>
