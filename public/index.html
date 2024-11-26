@@ -10,12 +10,27 @@
             margin: 0;
             padding: 0;
             text-align: center;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            margin-top: 20px;
+            color: #333;
+        }
+        p {
+            color: #666;
+        }
+        .video-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
         }
         video {
-            width: 80%;
+            width: 300px;
             height: auto;
             border: 2px solid green;
-            margin-top: 20px;
+            border-radius: 8px;
         }
     </style>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
@@ -25,17 +40,18 @@
 <h1>Mobile Camera Feed</h1>
 <p>Stream your mobile camera and share it!</p>
 
-<video id="localVideo" autoplay muted></video>
-<video id="remoteVideo" autoplay></video>
+<div class="video-container" id="videoContainer">
+    <video id="localVideo" autoplay muted></video>
+</div>
 
 <script>
     const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
+    const videoContainer = document.getElementById('videoContainer');
 
     const socket = io('https://evo-gqz9.onrender.com'); // Replace with your deployed server URL
 
     let localStream;
-    let peerConnection;
+    let peerConnections = {}; // Object to manage multiple peer connections
     const iceServers = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' } // Use Google's public STUN server
@@ -51,16 +67,16 @@
             });
             localVideo.srcObject = localStream;
 
-            // Emit offer to the server
-            createOffer();
+            // Notify server about the video stream
+            socket.emit('video-stream');
         } catch (error) {
             console.error('Error accessing media devices:', error);
         }
     }
 
     // Create a new peer connection
-    function createPeerConnection() {
-        peerConnection = new RTCPeerConnection(iceServers);
+    function createPeerConnection(socketId) {
+        const peerConnection = new RTCPeerConnection(iceServers);
 
         // Add local stream tracks to the peer connection
         localStream.getTracks().forEach(track => {
@@ -70,32 +86,33 @@
         // Handle ICE candidates
         peerConnection.onicecandidate = event => {
             if (event.candidate) {
-                socket.emit('ice-candidate', event.candidate);
+                socket.emit('ice-candidate', {
+                    candidate: event.candidate,
+                    id: socketId
+                });
             }
         };
 
         // Handle remote stream
         peerConnection.ontrack = event => {
+            let remoteVideo = document.getElementById(socketId);
+            if (!remoteVideo) {
+                remoteVideo = document.createElement('video');
+                remoteVideo.id = socketId;
+                remoteVideo.autoplay = true;
+                remoteVideo.controls = true;
+                videoContainer.appendChild(remoteVideo);
+            }
             remoteVideo.srcObject = event.streams[0];
         };
-    }
 
-    // Create and send an offer
-    async function createOffer() {
-        createPeerConnection();
-
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-
-        socket.emit('offer', {
-            sdp: offer.sdp,
-            type: offer.type
-        });
+        return peerConnection;
     }
 
     // Handle incoming offer
-    socket.on('offer', async data => {
-        createPeerConnection();
+    socket.on('offer', async ({ data, id }) => {
+        const peerConnection = createPeerConnection(id);
+        peerConnections[id] = peerConnection;
 
         const remoteDesc = new RTCSessionDescription(data);
         await peerConnection.setRemoteDescription(remoteDesc);
@@ -105,22 +122,37 @@
 
         socket.emit('answer', {
             sdp: answer.sdp,
-            type: answer.type
+            type: answer.type,
+            id
         });
     });
 
     // Handle incoming answer
-    socket.on('answer', async data => {
+    socket.on('answer', async ({ data, id }) => {
+        const peerConnection = peerConnections[id];
         const remoteDesc = new RTCSessionDescription(data);
         await peerConnection.setRemoteDescription(remoteDesc);
     });
 
     // Handle incoming ICE candidates
-    socket.on('ice-candidate', async data => {
+    socket.on('ice-candidate', async ({ candidate, id }) => {
+        const peerConnection = peerConnections[id];
         try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (error) {
             console.error('Error adding received ICE candidate:', error);
+        }
+    });
+
+    // Handle user disconnection
+    socket.on('user-disconnected', id => {
+        const video = document.getElementById(id);
+        if (video) {
+            video.remove();
+        }
+        if (peerConnections[id]) {
+            peerConnections[id].close();
+            delete peerConnections[id];
         }
     });
 
