@@ -87,7 +87,7 @@
         // Start streaming from local camera
         async function startLocalStream() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                 const localVideo = addVideoElement('local');
                 localVideo.srcObject = stream;
 
