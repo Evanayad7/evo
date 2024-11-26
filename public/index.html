@@ -12,25 +12,23 @@
             text-align: center;
             background-color: #f4f4f4;
         }
-        h1 {
+        video {
+            width: 80%;
+            height: auto;
+            border: 2px solid green;
             margin-top: 20px;
-            color: #333;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
         }
-        p {
-            color: #666;
-        }
-        .video-container {
+        #videos {
             display: flex;
             flex-wrap: wrap;
             justify-content: center;
-            gap: 20px;
-            padding: 20px;
         }
-        video {
-            width: 300px;
-            height: auto;
-            border: 2px solid green;
-            border-radius: 8px;
+        #videos video {
+            width: 45%;
+            margin: 10px;
         }
     </style>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
@@ -40,25 +38,25 @@
 <h1>Mobile Camera Feed</h1>
 <p>Stream your mobile camera and share it!</p>
 
-<div class="video-container" id="videoContainer">
+<div id="videos">
     <video id="localVideo" autoplay muted></video>
 </div>
 
 <script>
     const localVideo = document.getElementById('localVideo');
-    const videoContainer = document.getElementById('videoContainer');
+    const videoContainer = document.getElementById('videos');
 
     const socket = io('https://evo-gqz9.onrender.com'); // Replace with your deployed server URL
 
     let localStream;
-    let peerConnections = {}; // Object to manage multiple peer connections
+    const peerConnections = {}; // Store RTCPeerConnections by socket ID
     const iceServers = {
         iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' } // Use Google's public STUN server
+            { urls: 'stun:stun.l.google.com:19302' } // Google's public STUN server
         ]
     };
 
-    // Get user's camera only (no microphone)
+    // Start streaming the local camera
     async function startStream() {
         try {
             localStream = await navigator.mediaDevices.getUserMedia({
@@ -67,14 +65,14 @@
             });
             localVideo.srcObject = localStream;
 
-            // Notify server about the video stream
-            socket.emit('video-stream');
+            // Notify server that we have a stream ready
+            socket.emit('ready-to-stream');
         } catch (error) {
             console.error('Error accessing media devices:', error);
         }
     }
 
-    // Create a new peer connection
+    // Create a new peer connection for a specific socket ID
     function createPeerConnection(socketId) {
         const peerConnection = new RTCPeerConnection(iceServers);
 
@@ -86,10 +84,7 @@
         // Handle ICE candidates
         peerConnection.onicecandidate = event => {
             if (event.candidate) {
-                socket.emit('ice-candidate', {
-                    candidate: event.candidate,
-                    id: socketId
-                });
+                socket.emit('ice-candidate', { candidate: event.candidate, id: socketId });
             }
         };
 
@@ -100,55 +95,68 @@
                 remoteVideo = document.createElement('video');
                 remoteVideo.id = socketId;
                 remoteVideo.autoplay = true;
-                remoteVideo.controls = true;
                 videoContainer.appendChild(remoteVideo);
             }
             remoteVideo.srcObject = event.streams[0];
         };
 
-        return peerConnection;
+        peerConnections[socketId] = peerConnection;
     }
 
-    // Handle incoming offer
-    socket.on('offer', async ({ data, id }) => {
-        const peerConnection = createPeerConnection(id);
-        peerConnections[id] = peerConnection;
+    // Create and send an offer to a specific socket ID
+    async function createOffer(socketId) {
+        const peerConnection = peerConnections[socketId];
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
 
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
+        socket.emit('offer', { sdp: offer.sdp, type: offer.type, id: socketId });
+    }
 
+    // Handle incoming offers
+    socket.on('offer', async ({ sdp, type, id }) => {
+        if (!peerConnections[id]) {
+            createPeerConnection(id);
+        }
+
+        const remoteDesc = new RTCSessionDescription({ sdp, type });
+        await peerConnections[id].setRemoteDescription(remoteDesc);
+
+        const peerConnection = peerConnections[id];
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
 
-        socket.emit('answer', {
-            sdp: answer.sdp,
-            type: answer.type,
-            id
-        });
+        socket.emit('answer', { sdp: answer.sdp, type: answer.type, id });
     });
 
-    // Handle incoming answer
-    socket.on('answer', async ({ data, id }) => {
-        const peerConnection = peerConnections[id];
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
+    // Handle incoming answers
+    socket.on('answer', async ({ sdp, type, id }) => {
+        const remoteDesc = new RTCSessionDescription({ sdp, type });
+        await peerConnections[id].setRemoteDescription(remoteDesc);
     });
 
     // Handle incoming ICE candidates
     socket.on('ice-candidate', async ({ candidate, id }) => {
         const peerConnection = peerConnections[id];
-        try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (error) {
-            console.error('Error adding received ICE candidate:', error);
+        if (candidate) {
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error('Error adding received ICE candidate:', error);
+            }
         }
     });
 
-    // Handle user disconnection
+    // Handle new connections
+    socket.on('new-user', id => {
+        createPeerConnection(id);
+        createOffer(id);
+    });
+
+    // Handle disconnections
     socket.on('user-disconnected', id => {
-        const video = document.getElementById(id);
-        if (video) {
-            video.remove();
+        const remoteVideo = document.getElementById(id);
+        if (remoteVideo) {
+            remoteVideo.remove();
         }
         if (peerConnections[id]) {
             peerConnections[id].close();
