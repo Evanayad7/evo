@@ -3,162 +3,181 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mobile Camera Feed</title>
+    <title>Multi-Camera Streaming</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
-            text-align: center;
             background-color: #f4f4f4;
-        }
-        h1 {
-            margin-top: 20px;
             color: #333;
         }
-        p {
-            color: #666;
+        header {
+            background-color: #333;
+            color: #fff;
+            padding: 10px 20px;
+            text-align: center;
         }
-        .video-container {
+        #video-container {
             display: flex;
             flex-wrap: wrap;
             justify-content: center;
-            gap: 20px;
-            padding: 20px;
+            margin: 20px;
         }
         video {
+            margin: 10px;
+            border: 2px solid #333;
             width: 300px;
             height: auto;
-            border: 2px solid green;
-            border-radius: 8px;
+        }
+        #log {
+            margin: 20px auto;
+            max-width: 600px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            background: #fff;
+            overflow-y: scroll;
+            max-height: 200px;
         }
     </style>
-    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
 </head>
 <body>
+    <header>
+        <h1>Multi-Camera Streaming</h1>
+    </header>
+    <div id="video-container"></div>
+    <div id="log"></div>
 
-<h1>Mobile Camera Feed</h1>
-<p>Stream your mobile camera and share it!</p>
+    <script>
+        const socket = io.connect();
+        const videoContainer = document.getElementById('video-container');
+        const log = document.getElementById('log');
 
-<div class="video-container" id="videoContainer">
-    <video id="localVideo" autoplay muted></video>
-</div>
+        const peers = {};
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
 
-<script>
-    const localVideo = document.getElementById('localVideo');
-    const videoContainer = document.getElementById('videoContainer');
-
-    const socket = io('https://evo-gqz9.onrender.com'); // Replace with your deployed server URL
-
-    let localStream;
-    let peerConnections = {}; // Object to manage multiple peer connections
-    const iceServers = {
-        iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' } // Use Google's public STUN server
-        ]
-    };
-
-    // Get user's camera only (no microphone)
-    async function startStream() {
-        try {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false // Exclude audio
-            });
-            localVideo.srcObject = localStream;
-
-            // Notify server about the video stream
-            socket.emit('video-stream');
-        } catch (error) {
-            console.error('Error accessing media devices:', error);
+        function logMessage(message) {
+            const logEntry = document.createElement('div');
+            logEntry.textContent = message;
+            log.appendChild(logEntry);
         }
-    }
 
-    // Create a new peer connection
-    function createPeerConnection(socketId) {
-        const peerConnection = new RTCPeerConnection(iceServers);
+        // Add a video element to the DOM
+        function addVideoElement(id) {
+            const video = document.createElement('video');
+            video.id = `video-${id}`;
+            video.autoplay = true;
+            videoContainer.appendChild(video);
+            return video;
+        }
 
-        // Add local stream tracks to the peer connection
-        localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, localStream);
+        // Remove a video element from the DOM
+        function removeVideoElement(id) {
+            const video = document.getElementById(`video-${id}`);
+            if (video) {
+                videoContainer.removeChild(video);
+            }
+        }
+
+        // Start streaming from local camera
+        async function startLocalStream() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const localVideo = addVideoElement('local');
+                localVideo.srcObject = stream;
+
+                socket.emit('new-peer');
+                return stream;
+            } catch (err) {
+                logMessage('Error accessing camera: ' + err.message);
+            }
+        }
+
+        // Create a new peer connection
+        function createPeerConnection(id, stream) {
+            const peerConnection = new RTCPeerConnection(configuration);
+
+            stream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, stream);
+            });
+
+            peerConnection.ontrack = (event) => {
+                const video = peers[id] || addVideoElement(id);
+                video.srcObject = event.streams[0];
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', { target: id, candidate: event.candidate });
+                }
+            };
+
+            return peerConnection;
+        }
+
+        // Handle user connections
+        socket.on('user-connected', (id) => {
+            logMessage(`User connected: ${id}`);
+            const peerConnection = createPeerConnection(id, localStream);
+            peers[id] = peerConnection;
+
+            peerConnection.createOffer().then((offer) => {
+                peerConnection.setLocalDescription(offer);
+                socket.emit('offer', { target: id, sdp: offer });
+            });
+        });
+
+        // Handle incoming offers
+        socket.on('offer', async ({ id, data }) => {
+            logMessage(`Offer received from: ${id}`);
+            const peerConnection = createPeerConnection(id, localStream);
+            peers[id] = peerConnection;
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            socket.emit('answer', { target: id, sdp: answer });
+        });
+
+        // Handle incoming answers
+        socket.on('answer', async ({ id, data }) => {
+            logMessage(`Answer received from: ${id}`);
+            const peerConnection = peers[id];
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
+            }
         });
 
         // Handle ICE candidates
-        peerConnection.onicecandidate = event => {
-            if (event.candidate) {
-                socket.emit('ice-candidate', {
-                    candidate: event.candidate,
-                    id: socketId
-                });
+        socket.on('ice-candidate', ({ id, candidate }) => {
+            logMessage(`ICE Candidate received from: ${id}`);
+            const peerConnection = peers[id];
+            if (peerConnection) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             }
-        };
-
-        // Handle remote stream
-        peerConnection.ontrack = event => {
-            let remoteVideo = document.getElementById(socketId);
-            if (!remoteVideo) {
-                remoteVideo = document.createElement('video');
-                remoteVideo.id = socketId;
-                remoteVideo.autoplay = true;
-                remoteVideo.controls = true;
-                videoContainer.appendChild(remoteVideo);
-            }
-            remoteVideo.srcObject = event.streams[0];
-        };
-
-        return peerConnection;
-    }
-
-    // Handle incoming offer
-    socket.on('offer', async ({ data, id }) => {
-        const peerConnection = createPeerConnection(id);
-        peerConnections[id] = peerConnection;
-
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit('answer', {
-            sdp: answer.sdp,
-            type: answer.type,
-            id
         });
-    });
 
-    // Handle incoming answer
-    socket.on('answer', async ({ data, id }) => {
-        const peerConnection = peerConnections[id];
-        const remoteDesc = new RTCSessionDescription(data);
-        await peerConnection.setRemoteDescription(remoteDesc);
-    });
+        // Handle user disconnections
+        socket.on('user-disconnected', (id) => {
+            logMessage(`User disconnected: ${id}`);
+            if (peers[id]) {
+                peers[id].close();
+                delete peers[id];
+            }
+            removeVideoElement(id);
+        });
 
-    // Handle incoming ICE candidates
-    socket.on('ice-candidate', async ({ candidate, id }) => {
-        const peerConnection = peerConnections[id];
-        try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (error) {
-            console.error('Error adding received ICE candidate:', error);
-        }
-    });
-
-    // Handle user disconnection
-    socket.on('user-disconnected', id => {
-        const video = document.getElementById(id);
-        if (video) {
-            video.remove();
-        }
-        if (peerConnections[id]) {
-            peerConnections[id].close();
-            delete peerConnections[id];
-        }
-    });
-
-    // Start the stream on page load
-    window.onload = startStream;
-</script>
-
+        // Start the application
+        let localStream;
+        startLocalStream().then((stream) => {
+            localStream = stream;
+        });
+    </script>
 </body>
 </html>
