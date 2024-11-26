@@ -20,44 +20,46 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: '*', // Allow all origins (update this with specific domains in production)
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+  },
 });
 
 // Handle WebSocket connections
 io.on('connection', (socket) => {
-  console.log('A user connected');
+  console.log('A user connected:', socket.id);
 
   // Handle incoming video stream
   socket.on('video-stream', (stream) => {
-    // Broadcast the video stream to other connected clients
-    socket.broadcast.emit('video-stream', stream);
+    // Broadcast the video stream with a unique ID to other clients
+    socket.broadcast.emit('video-stream', { stream, id: socket.id });
   });
 
   // Handle offer (WebRTC signaling)
   socket.on('offer', (data) => {
-    console.log('Offer received:', data);
-    // Broadcast the offer to other clients
-    socket.broadcast.emit('offer', data);
+    console.log('Offer received from:', socket.id);
+    // Broadcast the offer with a unique ID to other clients
+    socket.broadcast.emit('offer', { data, id: socket.id });
   });
 
   // Handle answer (WebRTC signaling)
   socket.on('answer', (data) => {
-    console.log('Answer received:', data);
-    // Broadcast the answer to other clients
-    socket.broadcast.emit('answer', data);
+    console.log('Answer received from:', socket.id);
+    // Broadcast the answer with a unique ID to other clients
+    socket.broadcast.emit('answer', { data, id: socket.id });
   });
 
   // Handle ICE candidates (WebRTC signaling)
   socket.on('ice-candidate', (candidate) => {
-    console.log('ICE Candidate received:', candidate);
-    // Broadcast the ICE candidate to other clients
-    socket.broadcast.emit('ice-candidate', candidate);
+    console.log('ICE Candidate received from:', socket.id);
+    // Broadcast the ICE candidate with a unique ID to other clients
+    socket.broadcast.emit('ice-candidate', { candidate, id: socket.id });
   });
 
-  // Handle disconnections
+  // Notify clients about user disconnection
   socket.on('disconnect', () => {
-    console.log('A user disconnected');
+    console.log('A user disconnected:', socket.id);
+    // Inform other clients about the disconnected user
+    socket.broadcast.emit('user-disconnected', socket.id);
   });
 });
 
