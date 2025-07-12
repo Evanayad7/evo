@@ -14,48 +14,76 @@ const pool = new Pool({
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-
-// Updated endpoint to get translation data based on your table structure
 app.get('/api/translate', async (req, res) => {
     try {
-        // Get all translated terms (is_untouched = false)
         const translatedTerms = await pool.query(`
             SELECT term_key, english, arabic, turkish 
             FROM manga_translations 
             WHERE is_untouched = FALSE
         `);
         
-        // Get all untouched terms (is_untouched = true)
         const untouchedTerms = await pool.query(`
             SELECT term_key, english 
             FROM manga_translations 
             WHERE is_untouched = TRUE
         `);
         
-        // Format the translated terms
-        const translations = {};
+        // Initialize the main translations object
+        const translations = {
+            search: {},
+            peak_manga: {},
+            categories: [],
+            s_tier: {
+                items: []
+            },
+            latest_hit: {
+                items: []
+            }
+        };
+        
+        // Process translated terms
         translatedTerms.rows.forEach(row => {
-            translations[row.term_key] = {
+            const translation = {
                 en: row.english,
                 ar: row.arabic,
                 tr: row.turkish
             };
+            
+            // Handle categories separately
+            if (['fantasy', 'adventure', 'sports', 'magic'].includes(row.term_key)) {
+                translations.categories.push({
+                    [row.term_key]: translation
+                });
+            } 
+            // Handle search and peak_manga normally
+            else if (row.term_key === 'search' || row.term_key === 'peak_manga') {
+                translations[row.term_key] = translation;
+            }
+            // Handle s_tier and latest_hit
+            else if (row.term_key === 's_tier' || row.term_key === 'latest_hit') {
+                translations[row.term_key].title = translation;
+            }
         });
         
-        const untouched = {};
+        // Process untouched terms
+        const untouchedItems = [];
         untouchedTerms.rows.forEach(row => {
-            untouched[row.term_key] = row.english;
+            untouchedItems.push({
+                [row.term_key]: row.english
+            });
         });
         
-
-        const languageCount = 3; 
+        // Add untouched items to both s_tier and latest_hit
+        translations.s_tier.items = untouchedItems;
+        translations.latest_hit.items = untouchedItems;
+        
+        const languageCount = 3;
         
         res.json({
             success: true,
             language_count: languageCount,
             data: {
-                translations,
-                untouched
+                translations
             }
         });
     } catch (err) {
