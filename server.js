@@ -32,11 +32,16 @@ app.get('/api/translate', async (req, res) => {
         const translations = {
             search: {},
             peak_manga: {},
-            categories: [],
+            categories: {
+                title: {}, // This will hold the translation for "categories" word itself
+                items: [] // This will hold the category items
+            },
             s_tier: {
+                title: {},
                 items: []
             },
             latest_hit: {
+                title: {},
                 items: []
             }
         };
@@ -49,9 +54,12 @@ app.get('/api/translate', async (req, res) => {
                 tr: row.turkish
             };
             
-            // Handle categories separately
-            if (['fantasy', 'adventure', 'sports', 'magic'].includes(row.term_key)) {
-                translations.categories.push({
+            // Handle categories title and items separately
+            if (row.term_key === 'categories') {
+                translations.categories.title = translation;
+            }
+            else if (['fantasy', 'adventure', 'sports', 'magic'].includes(row.term_key)) {
+                translations.categories.items.push({
                     [row.term_key]: translation
                 });
             } 
@@ -59,7 +67,7 @@ app.get('/api/translate', async (req, res) => {
             else if (row.term_key === 'search' || row.term_key === 'peak_manga') {
                 translations[row.term_key] = translation;
             }
-            // Handle s_tier and latest_hit
+            // Handle s_tier and latest_hit titles
             else if (row.term_key === 's_tier' || row.term_key === 'latest_hit') {
                 translations[row.term_key].title = translation;
             }
