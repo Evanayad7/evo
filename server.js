@@ -11,15 +11,65 @@ const pool = new Pool({
     }
 });
 
-// Middleware to parse JSON requests
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Simplified login endpoint for Flutter
+
+// Updated endpoint to get translation data based on your table structure
+app.get('/api/translate', async (req, res) => {
+    try {
+        // Get all translated terms (is_untouched = false)
+        const translatedTerms = await pool.query(`
+            SELECT term_key, english, arabic, turkish 
+            FROM manga_translations 
+            WHERE is_untouched = FALSE
+        `);
+        
+        // Get all untouched terms (is_untouched = true)
+        const untouchedTerms = await pool.query(`
+            SELECT term_key, english 
+            FROM manga_translations 
+            WHERE is_untouched = TRUE
+        `);
+        
+        // Format the translated terms
+        const translations = {};
+        translatedTerms.rows.forEach(row => {
+            translations[row.term_key] = {
+                en: row.english,
+                ar: row.arabic,
+                tr: row.turkish
+            };
+        });
+        
+        const untouched = {};
+        untouchedTerms.rows.forEach(row => {
+            untouched[row.term_key] = row.english;
+        });
+        
+
+        const languageCount = 3; 
+        
+        res.json({
+            success: true,
+            language_count: languageCount,
+            data: {
+                translations,
+                untouched
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching translation data'
+        });
+    }
+});
+
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     
-    // Basic validation
     if (!username || !password) {
         return res.status(400).json(false);
     }
@@ -30,7 +80,6 @@ app.post('/login', async (req, res) => {
             [username, password]
         );
         
-        // Return just true/false
         res.json(result.rows.length > 0);
     } catch (err) {
         console.error(err);
