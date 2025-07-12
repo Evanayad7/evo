@@ -11,53 +11,30 @@ const pool = new Pool({
     }
 });
 
+// Middleware to parse JSON requests
+app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static('public'));
-app.set('view engine', 'ejs');
-app.set('views', './views');
 
-// New endpoint to get user credentials
-app.get('/api/users', async (req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT username, password FROM users'
-        );
-        
-        // Return just username and password for all users
-        res.json({
-            success: true,
-            users: result.rows
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching user data'
-        });
-    }
-});
-
-app.get('/', (req, res) => {
-    res.render('index', { message: '' });
-});
-
+// Simplified login endpoint for Flutter
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     
+    // Basic validation
+    if (!username || !password) {
+        return res.status(400).json(false);
+    }
+    
     try {
         const result = await pool.query(
-            'SELECT username, password FROM users WHERE username = $1 AND password = $2', 
+            'SELECT 1 FROM users WHERE username = $1 AND password = $2', 
             [username, password]
         );
         
-        if (result.rows.length > 0) {
-            res.render('index', { message: 'Login successful!' });
-        } else {
-            res.render('index', { message: 'Invalid username or password' });
-        }
+        // Return just true/false
+        res.json(result.rows.length > 0);
     } catch (err) {
         console.error(err);
-        res.render('index', { message: 'Error during authentication' });
+        res.status(500).json(false);
     }
 });
 
