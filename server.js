@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const bodyParser = require('body-parser');
+const zod = require('zod');
 const app = express();
 
 const pool = new Pool({
@@ -58,7 +59,7 @@ app.get('/api/translate', async (req, res) => {
             if (row.term_key === 'categories') {
                 translations.categories.title = translation;
             }
-            else if (['fantasy', 'adventure', 'sports', 'magic'].includes(row.term_key)) {
+            else if (['fantasy', 'adventure', 'sports', 'magic','isekai'].includes(row.term_key)) {
                 translations.categories.items.push({
                     [row.term_key]: translation
                 });
@@ -104,16 +105,30 @@ app.get('/api/translate', async (req, res) => {
 });
 
 app.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+
+    const loginSchema = zod.object({
+        username: zod.string({ required_error: 'Username is required' }),
+        password: zod.string()
+    });
     
-    if (!username || !password) {
-        return res.status(400).json(false);
+    let loginData
+
+    try {
+       loginData = loginSchema.parse(req.body);
+    } catch (err) {
+        console.error(err);
+        return res.status(400).json(JSON.parse(err.message));
     }
+    // const { username, password } = req.body;
+    
+    // if (!username || !password) {
+    //     return res.status(400).json(false);
+    // }
     
     try {
         const result = await pool.query(
             'SELECT 1 FROM users WHERE username = $1 AND password = $2', 
-            [username, password]
+            [loginData.username, loginData.password]
         );
         
         res.json(result.rows.length > 0);
